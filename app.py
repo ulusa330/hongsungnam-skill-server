@@ -119,7 +119,10 @@ def generate_answer(query, results):
 def health():
     return jsonify({"status": "ok", "message": "톡쏘는 영성심리 스킬 서버"})
 
-@app.route('/skill', methods=['POST'])
+@app.route('/skill', methods=['GET', 'POST'])
+def skill():
+    if request.method == 'GET':
+        return jsonify({"status": "ok", "message": "skill endpoint"})
 def skill():
     try:
         body = request.get_json()
