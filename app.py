@@ -80,6 +80,7 @@ def search_similar(query, n_results=5):
     similarities = np.array([cosine_similarity(query_embedding, emb) for emb in filtered_embeddings])
     top_local = np.argsort(similarities)[::-1][:n_results]
     top_indices = filter_indices[top_local]
+    top_sims = similarities[top_local]
     return {
         'documents': [db['documents'][i] for i in top_indices],
         'metadatas': [db['metadata'][i] for i in top_indices],
