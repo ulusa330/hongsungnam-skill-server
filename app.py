@@ -123,12 +123,14 @@ def health():
 def skill():
     if request.method == 'GET':
         return jsonify({"status": "ok", "message": "skill endpoint"})
-def skill():
     try:
         body = request.get_json()
         user_msg = body.get('userRequest', {}).get('utterance', '')
         if not user_msg:
-            return jsonify({"version": "2.0", "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}})
+            return jsonify({
+                "version": "2.0",
+                "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
+            })
         results = search_similar(user_msg)
         answer = generate_answer(user_msg, results)
         return jsonify({
