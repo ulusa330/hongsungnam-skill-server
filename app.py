@@ -366,7 +366,7 @@ def generate_answer(query, results):
         model="gpt-4o-mini",
         messages=messages,
         temperature=0.3,
-        max_tokens=800,
+        max_tokens=400,
     )
     return response.choices[0].message.content
 
@@ -389,7 +389,7 @@ def skill():
                 "version": "2.0",
                 "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
             })
-        results = search_similar(user_msg, n_results=7)
+        results = search_similar(user_msg, n_results=3)
         answer = generate_answer(user_msg, results)
         return jsonify({
             "version": "2.0",
