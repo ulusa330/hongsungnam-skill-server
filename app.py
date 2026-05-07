@@ -10,10 +10,25 @@ app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
 BOOK_SOURCE_TYPES = ['book_hong', 'book_bible', 'book_spiritual']
-SCHEDULE_KEYWORDS = ['강의 일정', '특강 일정', '다음 강의', '강의 날짜', '다음 특강', '몇월', '몇 월', '다음 특강 언제', '특강 있나요', '특강 있어요', '특강 언제', '특강 있']
+SCHEDULE_KEYWORDS = ['강의 일정', '특강 일정', '다음 강의', '강의 날짜', '다음 특강', '몇월', '몇 월', '다음 특강 언제', '특강 있나요', '특강 있어요', '특강 언제', '특강 있', '특강 일정']
 LECTURE_QUERY_KEYWORDS = ['월특강', '특강 요약', '특강요약', '특강영상', '특강 영상', '월 특강', '요약해줘', '요약해 줘', '요약 해줘', '특강을 요약', '특강 내용', '요약정리', '요약 정리', '특강 정리']
 
 db = None
+SCHEDULE = None
+
+def load_schedule():
+    global SCHEDULE
+    schedule_path = Path("./schedule.json")
+    if not schedule_path.exists():
+        SCHEDULE = None
+        return
+    try:
+        with open(schedule_path, 'r', encoding='utf-8') as f:
+            SCHEDULE = json.load(f)
+        print("schedule.json 로드 완료")
+    except Exception as e:
+        print(f"schedule.json 로드 오류: {e}")
+        SCHEDULE = None
 
 def load_db():
     global db
@@ -87,9 +102,34 @@ def search_similar(query, n_results=5):
         'similarities': [float(s) for s in top_sims],
     }
 
+def get_schedule_text():
+    if SCHEDULE is None:
+        return None
+    lecture = SCHEDULE.get('next_lecture', {})
+    if lecture.get('status') == 'confirmed':
+        date = lecture.get('date', '')
+        text = f"다음 특강 일정을 알려드립니다.\n"
+        text += f"📅 날짜: {date} ({lecture.get('day_of_week', '')}요일)\n"
+        text += f"⏰ 시간: 오후 {lecture.get('time_start', '')} ~ {lecture.get('time_end', '')}\n"
+        text += f"📍 장소: {lecture.get('location', '')}\n"
+        text += f"💰 회비: {lecture.get('fee', '')}\n"
+        text += f"📞 문의: {lecture.get('contact', '')}\n"
+        if lecture.get('note'):
+            text += f"✏️ 비고: {lecture.get('note', '')}"
+        return text
+    return None
+
 def generate_answer(query, results):
     is_schedule = any(kw in query for kw in SCHEDULE_KEYWORDS)
-    if is_schedule or results is None:
+    if is_schedule:
+        schedule_text = get_schedule_text()
+        if schedule_text:
+            return schedule_text
+        messages = [
+            {"role": "system", "content": "당신은 홍성남 마태오 신부입니다. 따뜻하고 친근한 신부님 말투로 답변하세요. 답변은 300자 이내로 간결하게."},
+            {"role": "user", "content": query}
+        ]
+    elif results is None:
         messages = [
             {"role": "system", "content": "당신은 홍성남 마태오 신부입니다. 따뜻하고 친근한 신부님 말투로 답변하세요. 답변은 300자 이내로 간결하게."},
             {"role": "user", "content": query}
@@ -150,6 +190,7 @@ def skill():
 
 with app.app_context():
     load_db()
+    load_schedule()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
