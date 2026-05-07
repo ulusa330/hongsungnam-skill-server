@@ -52,7 +52,6 @@ def load_schedule():
     try:
         with open(schedule_path, 'r', encoding='utf-8') as f:
             SCHEDULE = json.load(f)
-        # 다음 특강 월 키워드 자동 추가
         try:
             _next = SCHEDULE.get("next_lecture", {})
             if _next.get("status") == "confirmed":
@@ -256,12 +255,11 @@ def apply_filter(source_filter):
                 valid_indices.append(i)
     return valid_indices
 
-def search_similar(query, n_results=5):
+def search_similar(query, n_results=3):
     if db is None:
         return None
     response = client.embeddings.create(model="text-embedding-3-small", input=query)
     query_embedding = np.array(response.data[0].embedding)
-
     is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
     if is_lecture_q:
         filter_indices = get_lecture_filter_indices(query)
@@ -275,17 +273,14 @@ def search_similar(query, n_results=5):
             filter_indices = [i for i in filter_indices if i in normal_set]
         else:
             filter_indices = normal_indices
-
     if not filter_indices:
         return None
-
     filter_indices = np.array(filter_indices)
     filtered_embeddings = db['embeddings'][filter_indices]
     similarities = np.array([cosine_similarity(query_embedding, emb) for emb in filtered_embeddings])
     top_local = np.argsort(similarities)[::-1][:n_results]
     top_indices = filter_indices[top_local]
     top_sims = similarities[top_local]
-
     return {
         'documents': [db['documents'][i] for i in top_indices],
         'metadatas': [db['metadata'][i] for i in top_indices],
@@ -312,27 +307,22 @@ def generate_answer(query, results):
 - 방송: cpbc TV, 유튜브 '톡쏘는 영성심리' 채널
 - 스타일: 심리 상담과 영성지도를 결합, 직설적이고 현실적인 언어 사용
 
-[맹모닝 상담소 파트너 — 맹경순 베로니카]
-- cpbc 아나운서, 현재 유튜브 '톡쏘는 영성심리' 채널에서 함께 진행
-
 [나의 저서]
 최근·대표작: 「끝까지 나를 사랑하는 마음」「나는 생각보다 괜찮은 사람」「거꾸로 보는 종교」「혼자서 마음을 치유하는 법」「내 마음이 어때서」「나로 사는 걸 깜빡했어요」「챙기고 사세요」
-이전 저서: 「화나면 화내고 힘들 땐 쉬어」「아! 어쩠나」시리즈 「풀어야 산다」「행복을 위한 탈출」「새장 밖으로」
 
 [말투 규칙]
 - "홍성남 신부님은 ~라고 말씀하셨습니다" 절대 금지 — 1인칭으로만 말하세요
 - 따뜻하면서도 직설적이고 톡 쏘는 어조
-- 답변은 500자 이내로 간결하게
+- 답변은 400자 이내로 간결하게
 
 [상담 안내 규칙]
-- 상담 요청 시 "감사합니다", "반갑습니다" 같은 환영 문구 절대 금지
+- 상담 요청 시 환영 문구 절대 금지
 - 바로 핵심만: "저는 현재 성직자 상담만 하고 있어서 일반 신자분들과 개인 상담은 어렵습니다."
 - 전문 상담: 가톨릭영성심리상담소 (02-776-8405, 오전 11시~오후 4시)
-- 유튜브 방송 상담: talktoclinic@naver.com 으로 사연 보내주시면 방송을 통해 답변드립니다.
 
 [시제 규칙]
-- 과거 특강 내용 답변 시 반드시 과거형: ~였습니다, ~했습니다, ~다루었습니다
-- 미래형 절대 금지: ~예정입니다, ~진행될 것입니다
+- 과거 특강 내용 답변 시 반드시 과거형
+- 미래형 절대 금지
 
 [월특강 요약 답변 규칙]
 - 컨텍스트에 월특강 요약이 제공되면 반드시 그 내용으로 답변. "정보가 없다" 절대 금지.
@@ -362,7 +352,7 @@ def generate_answer(query, results):
         {"role": "user", "content": user_content},
     ]
 
-response = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
         temperature=0.3,
@@ -371,7 +361,7 @@ response = client.chat.completions.create(
     answer = response.choices[0].message.content
 
     # 관련 영상 링크 추가 (일정 질문 제외)
-    if results and results.get('documents') and not is_schedule:
+    if results and results.get('metadatas') and not is_schedule:
         seen_titles = set()
         links = []
         for meta in results['metadatas']:
@@ -407,7 +397,7 @@ def skill():
                 "version": "2.0",
                 "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
             })
-        results = search_similar(user_msg, n_results=3)
+        results = search_similar(user_msg)
         answer = generate_answer(user_msg, results)
         return jsonify({
             "version": "2.0",
