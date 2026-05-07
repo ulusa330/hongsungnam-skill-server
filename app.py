@@ -362,13 +362,31 @@ def generate_answer(query, results):
         {"role": "user", "content": user_content},
     ]
 
-    response = client.chat.completions.create(
+response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
         temperature=0.3,
         max_tokens=400,
     )
-    return response.choices[0].message.content
+    answer = response.choices[0].message.content
+
+    # 관련 영상 링크 추가 (일정 질문 제외)
+    if results and results.get('documents') and not is_schedule:
+        seen_titles = set()
+        links = []
+        for meta in results['metadatas']:
+            title = meta.get('title', '')
+            url = meta.get('url', '')
+            source_type = meta.get('source_type', 'youtube')
+            if title and url and title not in seen_titles and source_type == 'youtube':
+                seen_titles.add(title)
+                links.append(f"• {title}\n  {url}")
+            if len(links) >= 2:
+                break
+        if links:
+            answer += "\n\n📹 관련 영상:\n" + "\n".join(links)
+
+    return answer
 
 # =====================================================================
 # Flask 엔드포인트
