@@ -1,0 +1,20 @@
+{
+  "next_lecture": {
+    "status": "confirmed",
+    "title": "영성심리특강",
+    "date": "2026-05-16",
+    "day_of_week": "토",
+    "time_start": "15:00",
+    "time_end": "17:00",
+    "location": "가톨릭회관 2층",
+    "fee": "없음",
+    "contact": "02-776-8405",
+    "note": "미사후 특강"
+  },
+  "regular_schedule": {
+    "pattern": "매월 셋째 주 토요일",
+    "time": "오후 3시",
+    "location": "가톨릭회관",
+    "contact": "02-776-8405"
+  }
+}
