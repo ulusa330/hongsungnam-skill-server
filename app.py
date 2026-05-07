@@ -74,7 +74,7 @@ def load_db():
         print("VectorDB 파일 없음")
         return None
     try:
-        data = np.load(embeddings_path)
+        data = np.load(embeddings_path, mmap_mode='r')
         embeddings = data['embeddings']
         with open(metadata_path, 'r', encoding='utf-8') as f:
             saved = json.load(f)
