@@ -27,7 +27,7 @@ CHATBOT_INQUIRY_MSG = """챗봇 관련 문의사항은 아래로 연락주세요
 
 CHATBOT_INQUIRY_KEYWORDS = ['불편', '오류', '버그', '안 돼', '안돼', '작동', '문의', '수정해', '고쳐', '이상해', '챗봇 문의', '챗봇 오류']
 
-SIMILARITY_THRESHOLD = 0.25
+SIMILARITY_THRESHOLD = 0.35
 
 NEWSPAPER_FILTERS = {
     '중앙일보': ['중앙일보', '중앙'],
