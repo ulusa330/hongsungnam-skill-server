@@ -13,6 +13,22 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
 FALLBACK_MSG = "죄송합니다. 잠시 후 다시 질문해 주세요.\n📞 문의: 02-776-8405 (오전 11시~오후 4시)"
 
+LOW_SIMILARITY_MSG = """죄송합니다. 해당 내용은 홍성남 신부님 채널에서 제공하고 있지 않습니다.
+
+아래 AI 서비스에서 질문해 보세요 😊
+- ChatGPT: https://chat.openai.com
+- Claude: https://claude.ai
+
+챗봇 관련 문의사항은 아래로 연락주세요
+📱 카톡 또는 문자: 010-3201-6900"""
+
+CHATBOT_INQUIRY_MSG = """챗봇 관련 문의사항은 아래로 연락주세요 😊
+📱 카톡 또는 문자: 010-3201-6900"""
+
+CHATBOT_INQUIRY_KEYWORDS = ['불편', '오류', '버그', '안 돼', '안돼', '작동', '문의', '수정해', '고쳐', '이상해', '챗봇 문의', '챗봇 오류']
+
+SIMILARITY_THRESHOLD = 0.25
+
 NEWSPAPER_FILTERS = {
     '중앙일보': ['중앙일보', '중앙'],
     '가톨릭신문': ['가톨릭신문', '가톨릭 신문'],
@@ -279,11 +295,24 @@ def search_similar(query, n_results=3):
     }
 
 def generate_answer(query, results):
+    # 챗봇 문의 키워드 감지
+    if any(kw in query for kw in CHATBOT_INQUIRY_KEYWORDS):
+        return CHATBOT_INQUIRY_MSG
+
+    # 일정 질문 처리
     is_schedule = any(kw in query for kw in SCHEDULE_KEYWORDS)
     if is_schedule:
         schedule_text = get_schedule_text()
         if schedule_text:
             return schedule_text
+
+    # 유사도 낮으면 다른 AI 안내
+    if results and results.get('similarities'):
+        max_similarity = max(results['similarities'])
+        if max_similarity < SIMILARITY_THRESHOLD:
+            return LOW_SIMILARITY_MSG
+    elif results is None:
+        return LOW_SIMILARITY_MSG
 
     system_prompt = f"""당신은 홍성남 마태오 신부의 말투와 관점으로 직접 상담해 주는 AI입니다.
 
