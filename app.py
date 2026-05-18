@@ -399,7 +399,7 @@ def generate_answer(query, results):
 
     answer = result[0]
 
-    if results and results.get('metadatas') and not is_schedule:
+    if results and results.get('metadatas') and not is_schedule and "제공하고 있지 않습니다" not in answer:
         seen_titles = set()
         links = []
         for meta in results['metadatas']:
