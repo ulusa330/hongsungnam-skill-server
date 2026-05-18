@@ -30,6 +30,15 @@ COUNSELING_KEYWORDS = ['상담 받고', '상담받고', '상담 신청', '상담
 
 SIMILARITY_THRESHOLD = 0.35
 
+# 범위 밖 키워드 — GPT 호출 없이 바로 안내
+OUT_OF_SCOPE_KEYWORDS = [
+    '베트남', '태국', '필리핀', '일본', '중국', '미국', '유럽', '해외',
+    '여행', '관광', '비행기', '항공', '숙박', '호텔', '맛집', '식당',
+    '날씨', '환율', '주식', '부동산', '아파트', '요리', '레시피',
+    '스포츠', '축구', '야구', '운동', '헬스', '다이어트',
+    '영어', '중국어', '일본어', '외국어',
+]
+
 NEWSPAPER_FILTERS = {
     '중앙일보': ['중앙일보', '중앙'],
     '가톨릭신문': ['가톨릭신문', '가톨릭 신문'],
@@ -300,6 +309,10 @@ def generate_answer(query, results):
     if any(kw in query for kw in CHATBOT_INQUIRY_KEYWORDS):
         return "챗봇 관련 문의사항은 아래로 연락주세요 😊\n📱 문자: 010-3201-6900"
 
+    # 범위 밖 키워드 감지 → 바로 안내 (GPT 호출 없이)
+    if any(kw in query for kw in OUT_OF_SCOPE_KEYWORDS):
+        return LOW_SIMILARITY_MSG
+        
     # 일정 질문 처리
     is_schedule = any(kw in query for kw in SCHEDULE_KEYWORDS)
     if is_schedule:
