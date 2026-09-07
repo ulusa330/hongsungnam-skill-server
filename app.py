@@ -283,13 +283,8 @@ def search_similar(query, n_results=3):
     else:
         source_filter = detect_source_filter(query)
         filter_indices = apply_filter(source_filter)
-        excluded_types = set(BOOK_SOURCE_TYPES)
-        normal_indices = [i for i, m in enumerate(db['metadata']) if m.get('source_type') not in excluded_types]
-        normal_set = set(normal_indices)
-        if filter_indices is not None:
-            filter_indices = [i for i in filter_indices if i in normal_set]
-        else:
-            filter_indices = normal_indices
+        if filter_indices is None:
+            filter_indices = list(range(len(db['metadata'])))
     if not filter_indices:
         return None
     filter_indices = np.array(filter_indices)
