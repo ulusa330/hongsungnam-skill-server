@@ -111,6 +111,10 @@ LECTURE_TOPIC_STOPWORDS = [
     '해줘', '해주세요', '해줄래', '특강', '영상',
 ]
 
+# 검색 쿼리에 직전 발화를 이어붙일지 판단하는 기준 - 지시어가 있을 때만
+# (홑글자 그/이/저는 다른 단어 속에 우연히 포함될 위험이 있어 제외)
+FOLLOWUP_REFERENCE_WORDS = ['해당', '그거', '이거', '저거', '그것', '이것', '저것']
+
 
 def extract_lecture_topic(query):
     """'마귀 관련 특강 영상이 있나요' -> '마귀' 처럼 핵심 주제어만 추출"""
@@ -547,11 +551,13 @@ def skill():
 
         history = get_history(user_id)
 
-        # 검색용 쿼리: "해당 영상 찾아줘"처럼 지시어만 있는 후속 질문을 위해
-        # 직전 사용자 발화를 함께 붙여서 검색 정확도를 보완
+        # 검색용 쿼리: "해당 영상 찾아줘"처럼 지시어만 있는 후속 질문일 때만
+        # 직전 사용자 발화를 함께 붙임. 매번 무조건 붙이면 완전히 새로운
+        # 독립된 질문(예: "방어기제에 대해서 설명 좀 해주세요")까지 이전 발화와
+        # 섞여서 검색 정확도가 오히려 떨어지는 문제가 있어, 지시어가 있을 때로 한정
         search_query = user_msg
         prior_user_msgs = [h['content'] for h in history if h['role'] == 'user']
-        if prior_user_msgs:
+        if prior_user_msgs and any(w in user_msg for w in FOLLOWUP_REFERENCE_WORDS):
             search_query = prior_user_msgs[-1] + ' ' + user_msg
 
         results = search_similar(search_query)
