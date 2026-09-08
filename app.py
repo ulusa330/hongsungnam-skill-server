@@ -258,8 +258,16 @@ def get_lecture_filter_indices(query):
     if len(topic) >= 2:
         keyword_matches = [i for i, m in all_summaries
                             if topic in db['documents'][i] or topic in m.get('title', '')]
-        if keyword_matches:
-            return keyword_matches
+        # 월특강 요약에는 실제 영상 URL이 없고 채널 주소만 있어(생성 당시
+        # 원본 영상을 특정하지 못함), 답변에 클릭 가능한 링크를 못 붙이는
+        # 문제가 있음. 같은 주제어를 언급하는 유튜브 영상도 함께 후보에
+        # 넣어서 실제 링크가 인용되도록 보완
+        youtube_matches = [i for i, m in enumerate(db['metadata'])
+                            if m.get('source_type') == 'youtube'
+                            and (topic in db['documents'][i] or topic in m.get('title', ''))]
+        combined = keyword_matches + youtube_matches[:5]
+        if combined:
+            return combined
 
     return [i for i, m in all_summaries]
 
