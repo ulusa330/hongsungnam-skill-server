@@ -63,6 +63,31 @@ BOOK_SOURCE_TYPES = ['book_hong', 'book_bible', 'book_spiritual']
 SCHEDULE_KEYWORDS = ['강의 일정', '특강 일정', '다음 강의', '강의 날짜', '다음 특강', '몇월', '몇 월', '다음 특강 언제', '특강 있나요', '특강 있어요', '특강 언제', '특강 있', '특강 일정']
 LECTURE_QUERY_KEYWORDS = ['월특강', '특강 요약', '특강요약', '특강영상', '특강 영상', '월 특강', '특강 보고', '특강 알려', '요약해줘', '요약해 줘', '요약 해줘', '특강을 요약', '특강 내용', '요약정리', '요약 정리', '특강을 보여', '특강 정리']
 
+# 특정 월/연도가 없는 월특강 질문에서 주제어를 뽑아내기 위한 불용어
+# (임베딩 유사도만으로는 좁은 도메인 특성상 순위가 불안정할 수 있어,
+#  주제어가 본문에 실제로 있으면 그 요약을 확실히 후보에 포함시킴)
+LECTURE_TOPIC_STOPWORDS = [
+    '특강 영상', '특강영상', '특강 요약', '특강요약', '월특강', '월 특강',
+    '관련', '내용', '얘기', '이야기', '주제',
+    '있나요', '있어요', '있을까요', '있습니까', '있는지', '있나',
+    '봤나요', '봤어요', '보여줘', '보여주세요', '보여줄래',
+    '알려줘', '알려주세요', '알려줄래', '알려줄',
+    '요약해줘', '요약해 줘', '요약해주세요', '요약 해줘',
+    '해줘', '해주세요', '해줄래', '특강', '영상',
+]
+
+
+def extract_lecture_topic(query):
+    """'마귀 관련 특강 영상이 있나요' -> '마귀' 처럼 핵심 주제어만 추출"""
+    topic = query
+    for kw in sorted(LECTURE_TOPIC_STOPWORDS, key=len, reverse=True):
+        topic = topic.replace(kw, ' ')
+    topic = re.sub(r'[?!.,]', ' ', topic)
+    topic = re.sub(r'\s+', ' ', topic).strip()
+    topic = re.sub(r'(에\s*대해서|에\s*대해|에\s*대한|이|가|은|는|을|를|의|도|와|과)$', '', topic).strip()
+    return topic
+
+
 db = None
 SCHEDULE = None
 
@@ -220,6 +245,16 @@ def get_lecture_filter_indices(query):
             month_files.sort(key=lambda x: x[1].get('filename', ''), reverse=True)
             latest_yymm = month_files[0][1].get('filename', '')[:4]
             return [i for i, m in month_files if m.get('filename', '').startswith(latest_yymm)]
+
+    # 월/연도가 특정되지 않은 경우: 질문에서 주제어를 뽑아 본문에 실제로
+    # 등장하는 요약이 있으면 임베딩 유사도와 무관하게 그 요약을 확실히 포함
+    topic = extract_lecture_topic(query)
+    if len(topic) >= 2:
+        keyword_matches = [i for i, m in all_summaries
+                            if topic in db['documents'][i] or topic in m.get('title', '')]
+        if keyword_matches:
+            return keyword_matches
+
     return [i for i, m in all_summaries]
 
 def detect_source_filter(query):
@@ -280,17 +315,22 @@ def search_similar(query, n_results=3):
     is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
     if is_lecture_q:
         filter_indices = get_lecture_filter_indices(query)
+        # 월/연도를 특정하지 않으면 월특강 요약 전체가 후보가 되는데,
+        # 모든 요약이 동일한 머리말로 시작해 유사도가 비슷하게 나옴.
+        # 상위 3개만 보면 실제 주제와 맞는 특강이 밀려날 수 있어 후보 범위를 넓힘.
+        effective_n = max(n_results, 15)
     else:
         source_filter = detect_source_filter(query)
         filter_indices = apply_filter(source_filter)
         if filter_indices is None:
             filter_indices = list(range(len(db['metadata'])))
+        effective_n = n_results
     if not filter_indices:
         return None
     filter_indices = np.array(filter_indices)
     filtered_embeddings = db['embeddings'][filter_indices]
     similarities = np.array([cosine_similarity(query_embedding, emb) for emb in filtered_embeddings])
-    top_local = np.argsort(similarities)[::-1][:n_results]
+    top_local = np.argsort(similarities)[::-1][:effective_n]
     top_indices = filter_indices[top_local]
     top_sims = similarities[top_local]
     return {
