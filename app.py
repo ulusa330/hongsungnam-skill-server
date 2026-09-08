@@ -356,12 +356,17 @@ def generate_answer(query, results):
             return schedule_text
 
     # 유사도 낮으면 다른 AI 안내
-    if results and results.get('similarities'):
-        max_similarity = max(results['similarities'])
-        if max_similarity < SIMILARITY_THRESHOLD:
+    # (월특강 요약은 키워드로 이미 정확히 걸러진 상태라 임베딩 유사도가
+    #  낮게 나올 수 있음 - 여러 섹션이 뭉쳐 임베딩되며 신호가 희석되기 때문.
+    #  텍스트에 실제로 있는지 확인한 게 더 확실한 근거이므로 임계값 검사를 건너뜀)
+    is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
+    if not is_lecture_q:
+        if results and results.get('similarities'):
+            max_similarity = max(results['similarities'])
+            if max_similarity < SIMILARITY_THRESHOLD:
+                return LOW_SIMILARITY_MSG
+        elif results is None:
             return LOW_SIMILARITY_MSG
-    elif results is None:
-        return LOW_SIMILARITY_MSG
 
     system_prompt = f"""당신은 홍성남 마태오 신부의 말투와 관점으로 직접 상담해 주는 AI입니다.
 
