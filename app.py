@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import numpy as np
 from flask import Flask, request, jsonify
 from openai import OpenAI
@@ -10,6 +11,30 @@ import threading
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+
+# 멀티턴 대화 이력 (사용자별, 메모리 저장 - 서버 재시작/재배포 시 초기화됨)
+# WEB_CONCURRENCY=1(단일 워커) 전제. 워커를 늘리면 워커 간 메모리가
+# 분리되어 이 방식이 깨지므로, 늘릴 경우 Redis 등 외부 저장소로 교체 필요
+CONVERSATION_HISTORY = {}
+MAX_HISTORY_TURNS = 4          # 최근 4턴(사용자+봇 메시지 최대 8개)까지만 기억
+HISTORY_TTL_SECONDS = 30 * 60  # 30분 이상 응답 없으면 새 대화로 취급
+
+
+def get_history(user_id):
+    entry = CONVERSATION_HISTORY.get(user_id)
+    if not entry:
+        return []
+    if time.time() - entry['last_active'] > HISTORY_TTL_SECONDS:
+        CONVERSATION_HISTORY.pop(user_id, None)
+        return []
+    return entry['messages']
+
+
+def append_history(user_id, role, content):
+    entry = CONVERSATION_HISTORY.setdefault(user_id, {'messages': [], 'last_active': time.time()})
+    entry['messages'].append({'role': role, 'content': content})
+    entry['messages'] = entry['messages'][-MAX_HISTORY_TURNS * 2:]
+    entry['last_active'] = time.time()
 
 FALLBACK_MSG = "죄송합니다. 잠시 후 다시 질문해 주세요.\n📞 상담 문의: 02-776-8405 (오전 11시~오후 4시)"
 
@@ -353,7 +378,7 @@ def search_similar(query, n_results=3):
         'similarities': [float(s) for s in top_sims],
     }
 
-def generate_answer(query, results):
+def generate_answer(query, results, history=None, is_lecture_q=None):
     # 챗봇/영상 문의 키워드 감지 → 010-3201-6900 안내
     if any(kw in query for kw in CHATBOT_INQUIRY_KEYWORDS):
         return "챗봇 관련 문의사항은 아래로 연락주세요 😊\n📱 문자: 010-3201-6900"
@@ -373,7 +398,11 @@ def generate_answer(query, results):
     # (월특강 요약은 키워드로 이미 정확히 걸러진 상태라 임베딩 유사도가
     #  낮게 나올 수 있음 - 여러 섹션이 뭉쳐 임베딩되며 신호가 희석되기 때문.
     #  텍스트에 실제로 있는지 확인한 게 더 확실한 근거이므로 임계값 검사를 건너뜀)
-    is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
+    # 검색 단계에서 이미 판단한 값이 있으면 그대로 사용 (후속 질문은 현재
+    # 발화만으로는 "특강" 키워드가 안 보일 수 있어, 검색에 쓰인 문맥 포함
+    # 쿼리 기준 판단과 일치시켜야 임계값 검사 여부가 어긋나지 않음)
+    if is_lecture_q is None:
+        is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
     if not is_lecture_q:
         if results and results.get('similarities'):
             max_similarity = max(results['similarities'])
@@ -402,6 +431,7 @@ def generate_answer(query, results):
 - 반드시 "하느님" 사용. "하나님" 절대 금지 (가톨릭 용어 준수)
 - 모든 종교·전례 용어는 가톨릭 공식 용어 기준 (예: 미사, 고해성사, 영성체, 성모님 등. 개신교식 표현 사용 금지)
 - 코너명은 반드시 "맹모닝 상담소" — "맥모닝"이라고 절대 쓰지 말 것 (컨텍스트 자료 제목에 영어 오표기가 있어도 답변에서는 "맹모닝"으로만 표기)
+- 링크는 마크다운 형식 [텍스트](URL) 절대 금지 — 카카오톡은 마크다운을 지원하지 않으므로 URL을 그대로("https://...") 텍스트에 적을 것
 
 [답변 범위 규칙 — 매우 중요]
 - 심리, 영성, 신앙생활, 인간관계, 감정, 가톨릭 교리 관련 질문만 답변
@@ -441,10 +471,10 @@ def generate_answer(query, results):
     else:
         user_content = f"질문: {query}"
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_content})
 
     result = [None]
     def call_gpt():
@@ -496,13 +526,29 @@ def skill():
     try:
         body = request.get_json()
         user_msg = body.get('userRequest', {}).get('utterance', '')
+        user_id = body.get('userRequest', {}).get('user', {}).get('id', 'anonymous')
         if not user_msg:
             return jsonify({
                 "version": "2.0",
                 "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
             })
-        results = search_similar(user_msg)
-        answer = generate_answer(user_msg, results)
+
+        history = get_history(user_id)
+
+        # 검색용 쿼리: "해당 영상 찾아줘"처럼 지시어만 있는 후속 질문을 위해
+        # 직전 사용자 발화를 함께 붙여서 검색 정확도를 보완
+        search_query = user_msg
+        prior_user_msgs = [h['content'] for h in history if h['role'] == 'user']
+        if prior_user_msgs:
+            search_query = prior_user_msgs[-1] + ' ' + user_msg
+
+        results = search_similar(search_query)
+        is_lecture_q = any(kw in search_query for kw in LECTURE_QUERY_KEYWORDS)
+        answer = generate_answer(user_msg, results, history=history, is_lecture_q=is_lecture_q)
+
+        append_history(user_id, 'user', user_msg)
+        append_history(user_id, 'assistant', answer)
+
         return jsonify({
             "version": "2.0",
             "template": {
