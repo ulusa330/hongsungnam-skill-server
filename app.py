@@ -502,8 +502,19 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
 - 챗봇/영상 관련 문의: 010-3201-6900 (문자로 연락주세요)
 
 [시제 규칙]
-- 과거 특강 내용 답변 시 반드시 과거형
+- 참고 내용이 특정 날짜에 있었던 일(특강, 팬미팅, 행사 등)을 담고 있다면, 그 날
+  있었던 일을 설명할 때는 반드시 과거형으로 서술할 것
+  (예: "그 자리에서 ~라고 말씀하셨습니다", "~하는 시간이었습니다")
+  — 이미 지나간 일이므로 "~하는 시간이 됩니다" 같은 일반론적 현재형은 쓰지 말 것
+- 다만 신앙/심리에 대한 일반적인 가르침이나 조언 내용 자체는 평소처럼 현재형으로 말해도 됨
 - 미래형 절대 금지
+
+[답변 구체성 규칙]
+- 참고 내용에 나온 실제 대화·발언·사례를 최대한 구체적으로 반영해서 답할 것
+- "소중한 시간이었습니다", "많은 도움이 되었습니다"처럼 무슨 내용이었는지 알 수 없는
+  두루뭉술한 문장만으로 답을 채우지 말 것 — 실제로 어떤 이야기가 오갔는지 담을 것
+- 참고 내용에서 신부님이 직설적이고 단호하게 말씀하신 부분이 있다면, 그 어조와
+  표현의 강도를 부드럽게 순화하지 말고 그대로 살려서 답할 것
 
 [월특강 요약 답변 규칙]
 - 컨텍스트에 월특강 요약이 제공되면 반드시 그 내용으로 답변. "정보가 없다" 절대 금지.
@@ -522,7 +533,12 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
                 source_label = "월특강 요약"
             else:
                 source_label = "유튜브 강의"
-            context_parts.append(f"[출처 {i+1}: {title} ({source_label})]\n{doc}")
+            upload_date = meta.get('upload_date', '')
+            date_label = ""
+            m = re.match(r'^(\d{4})(\d{2})(\d{2})$', upload_date)
+            if m:
+                date_label = f", {int(m.group(1))}년 {int(m.group(2))}월 {int(m.group(3))}일"
+            context_parts.append(f"[출처 {i+1}: {title} ({source_label}{date_label})]\n{doc}")
         context = "\n\n---\n\n".join(context_parts)
         user_content = f"질문: {query}\n\n참고할 내용:\n{context}\n\n위 내용을 바탕으로 답변해 주세요."
     else:
