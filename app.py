@@ -129,6 +129,24 @@ def extract_lecture_topic(query):
     return topic
 
 
+# 시리즈 필터(예: "맹모닝") 안에서도 구체적 주제어를 뽑아내기 위한 불용어.
+# "맹모닝 팬미팅"처럼 시리즈명만으로 필터링하면 같은 시리즈의 수백개 회차 중
+# 하나가 무작위로 뽑힐 수 있어, 시리즈명을 뺀 나머지를 주제어로 보고
+# 제목/본문에 실제로 있는 회차를 우선 매칭시킴
+GENERIC_REQUEST_SUFFIXES = ['영상', '내용', '이야기', '관련', '있나요', '있어요', '있을까요',
+                            '알려줘', '알려주세요', '보여줘', '보여주세요', '찾아줘', '찾아주세요',
+                            '해줘', '해주세요']
+
+
+def extract_topic_excluding(query, exclude_words):
+    topic = query
+    for kw in sorted(exclude_words, key=len, reverse=True):
+        topic = topic.replace(kw, ' ')
+    topic = re.sub(r'[?!.,]', ' ', topic)
+    topic = re.sub(r'\s+', ' ', topic).strip()
+    return topic
+
+
 db = None
 SCHEDULE = None
 
@@ -373,6 +391,16 @@ def search_similar(query, n_results=3):
         filter_indices = apply_filter(source_filter)
         if filter_indices is None:
             filter_indices = list(range(len(db['metadata'])))
+        elif source_filter.get('type') == 'youtube_series':
+            # 시리즈명만으로 걸러진 후보가 여러 회차일 수 있으므로, 시리즈명을
+            # 뺀 나머지를 주제어로 보고 제목/본문에 실제로 있는 회차를 우선 매칭
+            exclude = set(YOUTUBE_SERIES_FILTERS.get(source_filter['value'], [])) | set(GENERIC_REQUEST_SUFFIXES)
+            topic = extract_topic_excluding(query, exclude)
+            if len(topic) >= 2:
+                literal_matches = [i for i in filter_indices
+                                    if topic in db['documents'][i] or topic in db['metadata'][i].get('title', '')]
+                if literal_matches:
+                    filter_indices = literal_matches
         effective_n = n_results
     if not filter_indices:
         return None
