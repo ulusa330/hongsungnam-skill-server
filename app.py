@@ -397,10 +397,16 @@ def search_similar(query, n_results=3):
             exclude = set(YOUTUBE_SERIES_FILTERS.get(source_filter['value'], [])) | set(GENERIC_REQUEST_SUFFIXES)
             topic = extract_topic_excluding(query, exclude)
             if len(topic) >= 2:
-                literal_matches = [i for i in filter_indices
-                                    if topic in db['documents'][i] or topic in db['metadata'][i].get('title', '')]
-                if literal_matches:
-                    filter_indices = literal_matches
+                # 제목에 주제어가 직접 있는 회차를 최우선으로 함 - 본문에서
+                # 스치듯 언급된(다른 회차 홍보 등) 경우와 신뢰도가 다르므로
+                # 제목 매칭이 있으면 그것만 쓰고, 없을 때만 본문 매칭으로 완화
+                title_matches = [i for i in filter_indices if topic in db['metadata'][i].get('title', '')]
+                if title_matches:
+                    filter_indices = title_matches
+                else:
+                    doc_matches = [i for i in filter_indices if topic in db['documents'][i]]
+                    if doc_matches:
+                        filter_indices = doc_matches
         effective_n = n_results
     if not filter_indices:
         return None
