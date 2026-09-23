@@ -109,6 +109,8 @@ LECTURE_TOPIC_STOPWORDS = [
     '나온거', '나온', '다룬', '다뤘던', '다뤘',
     '언급한', '언급된', '말씀하신', '말한',
     '해줘', '해주세요', '해줄래', '특강', '영상',
+    '정리해줘', '정리해주세요', '정리해', '정리',
+    '에 대해서', '에 대해', '에 대한',
 ]
 
 # 검색 쿼리에 직전 발화를 이어붙일지 판단하는 기준 - 지시어가 있을 때만
@@ -116,35 +118,33 @@ LECTURE_TOPIC_STOPWORDS = [
 FOLLOWUP_REFERENCE_WORDS = ['해당', '그거', '이거', '저거', '그것', '이것', '저것']
 
 
-def extract_lecture_topic(query):
-    """'마귀 관련 특강 영상이 있나요' -> '마귀' 처럼 핵심 주제어만 추출"""
-    topic = query
-    for kw in sorted(LECTURE_TOPIC_STOPWORDS, key=len, reverse=True):
+def _strip_stopwords_and_particles(text, stopwords):
+    """주어진 불용어 목록을 제거하고, 낱말 사이에 홀로 남은 조사도 정리"""
+    topic = text
+    for kw in sorted(stopwords, key=len, reverse=True):
         topic = topic.replace(kw, ' ')
     topic = re.sub(r'[?!.,]', ' ', topic)
     # 낱말 사이에 홀로 떠다니는 조사 제거 (예: "마귀   이" -> "마귀")
-    topic = re.sub(r'(?<=\s)(이|가|을|를|은|는|도|의|와|과|만)(?=\s|$)', ' ', topic)
+    # (홑글자라도 공백으로 둘러싸인 독립 토큰일 때만 제거하므로 다른 단어 속
+    #  글자와 우연히 겹칠 위험이 없음)
+    topic = re.sub(r'(?<=\s)(이|가|을|를|은|는|도|의|와|과|만|좀)(?=\s|$)', ' ', topic)
     topic = re.sub(r'\s+', ' ', topic).strip()
     topic = re.sub(r'(에\s*대해서|에\s*대해|에\s*대한|이|가|은|는|을|를|의|도|와|과)$', '', topic).strip()
     return topic
 
 
-# 시리즈 필터(예: "맹모닝") 안에서도 구체적 주제어를 뽑아내기 위한 불용어.
-# "맹모닝 팬미팅"처럼 시리즈명만으로 필터링하면 같은 시리즈의 수백개 회차 중
-# 하나가 무작위로 뽑힐 수 있어, 시리즈명을 뺀 나머지를 주제어로 보고
-# 제목/본문에 실제로 있는 회차를 우선 매칭시킴
-GENERIC_REQUEST_SUFFIXES = ['영상', '내용', '이야기', '관련', '있나요', '있어요', '있을까요',
-                            '알려줘', '알려주세요', '보여줘', '보여주세요', '찾아줘', '찾아주세요',
-                            '해줘', '해주세요']
+def extract_lecture_topic(query):
+    """'마귀 관련 특강 영상이 있나요' -> '마귀' 처럼 핵심 주제어만 추출"""
+    return _strip_stopwords_and_particles(query, LECTURE_TOPIC_STOPWORDS)
 
 
 def extract_topic_excluding(query, exclude_words):
-    topic = query
-    for kw in sorted(exclude_words, key=len, reverse=True):
-        topic = topic.replace(kw, ' ')
-    topic = re.sub(r'[?!.,]', ' ', topic)
-    topic = re.sub(r'\s+', ' ', topic).strip()
-    return topic
+    """시리즈 필터(예: "맹모닝") 안에서도 구체적 주제어를 뽑아내기 위한 함수.
+    "맹모닝 팬미팅"처럼 시리즈명만으로 필터링하면 같은 시리즈의 수백개 회차 중
+    하나가 무작위로 뽑힐 수 있어, 시리즈명을 뺀 나머지를 주제어로 보고
+    제목/본문에 실제로 있는 회차를 우선 매칭시킴. LECTURE_TOPIC_STOPWORDS와
+    동일한 정제 로직을 재사용해 "정리해줘"류 표현 누락으로 어긋나지 않게 함"""
+    return _strip_stopwords_and_particles(query, exclude_words)
 
 
 db = None
@@ -395,7 +395,7 @@ def search_similar(query, n_results=3):
         elif source_filter.get('type') == 'youtube_series':
             # 시리즈명만으로 걸러진 후보가 여러 회차일 수 있으므로, 시리즈명을
             # 뺀 나머지를 주제어로 보고 제목/본문에 실제로 있는 회차를 우선 매칭
-            exclude = set(YOUTUBE_SERIES_FILTERS.get(source_filter['value'], [])) | set(GENERIC_REQUEST_SUFFIXES)
+            exclude = set(YOUTUBE_SERIES_FILTERS.get(source_filter['value'], [])) | set(LECTURE_TOPIC_STOPWORDS)
             topic = extract_topic_excluding(query, exclude)
             if len(topic) >= 2:
                 # 제목에 주제어가 직접 있는 회차를 최우선으로 함 - 본문에서
