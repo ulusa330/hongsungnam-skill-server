@@ -380,6 +380,7 @@ def search_similar(query, n_results=3):
     response = client.embeddings.create(model="text-embedding-3-small", input=query)
     query_embedding = np.array(response.data[0].embedding)
     is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
+    title_matched = False
     if is_lecture_q:
         filter_indices = get_lecture_filter_indices(query)
         # 월/연도를 특정하지 않으면 월특강 요약 전체가 후보가 되는데,
@@ -403,6 +404,7 @@ def search_similar(query, n_results=3):
                 title_matches = [i for i in filter_indices if topic in db['metadata'][i].get('title', '')]
                 if title_matches:
                     filter_indices = title_matches
+                    title_matched = True
                 else:
                     doc_matches = [i for i in filter_indices if topic in db['documents'][i]]
                     if doc_matches:
@@ -420,6 +422,7 @@ def search_similar(query, n_results=3):
         'documents': [db['documents'][i] for i in top_indices],
         'metadatas': [db['metadata'][i] for i in top_indices],
         'similarities': [float(s) for s in top_sims],
+        'title_matched': title_matched,
     }
 
 def generate_answer(query, results, history=None, is_lecture_q=None):
@@ -447,7 +450,11 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
     # 쿼리 기준 판단과 일치시켜야 임계값 검사 여부가 어긋나지 않음)
     if is_lecture_q is None:
         is_lecture_q = any(kw in query for kw in LECTURE_QUERY_KEYWORDS)
-    if not is_lecture_q:
+    # 시리즈 필터에서 제목에 주제어가 직접 매칭된 경우도 월특강과 같은 이유로
+    # 임계값 검사를 건너뜀 - 자유 대화 형식 영상은 청크 단위 유사도가 낮게
+    # 나올 수 있지만, 제목에 실제로 있다는 게 더 확실한 근거이기 때문
+    skip_threshold = is_lecture_q or (results and results.get('title_matched'))
+    if not skip_threshold:
         if results and results.get('similarities'):
             max_similarity = max(results['similarities'])
             if max_similarity < SIMILARITY_THRESHOLD:
