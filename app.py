@@ -17,7 +17,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 # 분리되어 이 방식이 깨지므로, 늘릴 경우 Redis 등 외부 저장소로 교체 필요
 CONVERSATION_HISTORY = {}
 MAX_HISTORY_TURNS = 4          # 최근 4턴(사용자+봇 메시지 최대 8개)까지만 기억
-HISTORY_TTL_SECONDS = 30 * 60  # 30분 이상 응답 없으면 새 대화로 취급
+HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6시간 이상 응답 없으면 새 대화로 취급
 
 
 def get_history(user_id):
@@ -37,6 +37,27 @@ def append_history(user_id, role, content):
     entry['last_active'] = time.time()
 
 FALLBACK_MSG = "죄송합니다. 잠시 후 다시 질문해 주세요.\n📞 상담 문의: 02-776-8405 (오전 11시~오후 4시)"
+
+# 위기 신호(자살, 자해, 타해, 학대) 감지 키워드 - 다른 모든 분류보다 최우선 확인.
+# LLM 판단이 아니라 키워드로 확정 처리하여, 이 경로에서만큼은 GPT를 아예
+# 호출하지 않는다(방법/수단을 지어내거나 안내할 위험을 원천 차단).
+CRISIS_KEYWORDS = [
+    '죽고 싶', '죽고싶', '살고 싶지 않', '살고싶지 않', '살기 싫', '살기싫',
+    '자살', '목숨을 끊', '목숨끊', '세상을 떠나고 싶',
+    '자해', '몸에 상처를 내', '손목을 긋', '칼로 긋',
+    '죽이고 싶', '죽여버리고 싶', '해치고 싶', '없애버리고 싶',
+    '맞고 산다', '맞고 살아', '맞고 사는', '폭력을 당하', '폭행을 당하',
+    '학대를 당하', '학대받', '학대하고',
+]
+
+CRISIS_RESPONSE_MSG = """지금 많이 힘드시겠어요. 혼자 견디지 않으셔도 됩니다.
+
+지금 바로 이야기 나눌 수 있는 곳입니다.
+📞 자살예방상담전화 109 (24시간, 무료)
+🚨 긴급 상황: 112(경찰) / 119(구급)
+📞 정신건강위기상담 1577-0199
+
+저는 챗봇이라 지금 겪고 계신 어려움에 전문적인 도움을 드리기 어렵습니다. 부디 위 번호로 지금 연락해 주세요."""
 
 LOW_SIMILARITY_MSG = """죄송합니다. 해당 내용은 홍성남 신부님 채널에서 제공하고 있지 않습니다.
 
@@ -604,6 +625,15 @@ def skill():
             return jsonify({
                 "version": "2.0",
                 "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
+            })
+
+        # 위기 신호는 다른 어떤 분류/검색보다 먼저, GPT 호출 없이 즉시 처리
+        if any(kw in user_msg for kw in CRISIS_KEYWORDS):
+            append_history(user_id, 'user', user_msg)
+            append_history(user_id, 'assistant', CRISIS_RESPONSE_MSG)
+            return jsonify({
+                "version": "2.0",
+                "template": {"outputs": [{"simpleText": {"text": CRISIS_RESPONSE_MSG}}]}
             })
 
         history = get_history(user_id)
