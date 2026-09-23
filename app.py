@@ -3,6 +3,7 @@ import re
 import json
 import time
 import numpy as np
+import requests
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from pathlib import Path
@@ -67,6 +68,10 @@ LOW_SIMILARITY_MSG = """죄송합니다. 해당 내용은 홍성남 신부님 �
 
 챗봇 관련 문의사항은 아래로 연락주세요
 📱 문자: 010-3201-6900"""
+
+# CHATBOT_SPEC.md 경로 D(범위 밖) 고정 문구 - 진짜로 주제 자체가 범위 밖인 경우
+# (LOW_SIMILARITY_MSG는 주제는 맞지만 DB에 없는 경우로 구분해서 사용)
+OUT_OF_SCOPE_MSG = "이 챗봇은 가톨릭 신앙과 마음, 심리 상담에 관한 질문에 답하도록 만들어졌습니다. 해당 질문은 일반 검색이나 다른 AI 서비스를 이용해 보시길 권합니다."
 
 # 챗봇/영상 관련 문의 키워드
 CHATBOT_INQUIRY_KEYWORDS = ['불편', '오류', '버그', '안 돼', '안돼', '작동', '챗봇 문의', '수정해', '고쳐', '이상해', '챗봇 오류', '답변이 이상', '영상이 이상', '링크가 이상', '잘못된 답']
@@ -446,14 +451,42 @@ def search_similar(query, n_results=3):
         'title_matched': title_matched,
     }
 
-def generate_answer(query, results, history=None, is_lecture_q=None):
+def classify_out_of_scope(query):
+    """CHATBOT_SPEC.md 1단계 분류(축소판) - 유사도 임계값에 걸려 거부 문구를
+    내보내기 직전에만 호출해, "주제 자체가 범위 밖"(경로 D)인지 "주제는
+    맞지만 DB에 없음"(경로 C)인지 LLM으로 한 번 더 구분한다. 매 질문마다
+    부르면 인사말 등도 오분류될 위험이 있어, 이미 유사도로 거부가
+    확정된 케이스에서만 보조적으로 사용한다."""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    '다음 질문이 가톨릭 신앙, 영성심리, 상담심리, 심리(마음, 관계, 감정) '
+                    '영역에 관한 것인지 판단해 JSON으로만 답하십시오.\n'
+                    '형식: {"in_scope": true 또는 false}'
+                )},
+                {"role": "user", "content": query},
+            ],
+            temperature=0,
+            max_tokens=20,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+        return not bool(data.get("in_scope", True))
+    except Exception as e:
+        print(f"분류 오류: {e}")
+        return False  # 분류 실패 시 기존처럼 경로 C(LOW_SIMILARITY_MSG)로 안전하게 폴백
+
+
+def generate_answer(query, results, history=None, is_lecture_q=None, gpt_timeout=4.0):
     # 챗봇/영상 문의 키워드 감지 → 010-3201-6900 안내
     if any(kw in query for kw in CHATBOT_INQUIRY_KEYWORDS):
         return "챗봇 관련 문의사항은 아래로 연락주세요 😊\n📱 문자: 010-3201-6900"
 
     # 범위 밖 키워드 감지 → 바로 안내 (GPT 호출 없이)
     if any(kw in query for kw in OUT_OF_SCOPE_KEYWORDS):
-        return LOW_SIMILARITY_MSG
+        return OUT_OF_SCOPE_MSG
         
     # 일정 질문 처리
     is_schedule = any(kw in query for kw in SCHEDULE_KEYWORDS)
@@ -476,11 +509,15 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
     # 나올 수 있지만, 제목에 실제로 있다는 게 더 확실한 근거이기 때문
     skip_threshold = is_lecture_q or (results and results.get('title_matched'))
     if not skip_threshold:
-        if results and results.get('similarities'):
-            max_similarity = max(results['similarities'])
-            if max_similarity < SIMILARITY_THRESHOLD:
-                return LOW_SIMILARITY_MSG
-        elif results is None:
+        below_threshold = (
+            (results and results.get('similarities') and max(results['similarities']) < SIMILARITY_THRESHOLD)
+            or results is None
+        )
+        if below_threshold:
+            # 유사도만으로는 "주제가 범위 밖"인지 "주제는 맞는데 DB에 없음"인지
+            # 구분이 안 됨 - LLM으로 한 번 더 판단해 경로 D/C를 나눔
+            if classify_out_of_scope(query):
+                return OUT_OF_SCOPE_MSG
             return LOW_SIMILARITY_MSG
 
     system_prompt = f"""당신은 홍성남 마태오 신부의 말투와 관점으로 직접 상담해 주는 AI입니다.
@@ -585,7 +622,7 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
 
     thread = threading.Thread(target=call_gpt)
     thread.start()
-    thread.join(timeout=4.0)
+    thread.join(timeout=gpt_timeout)
 
     if result[0] is None:
         return FALLBACK_MSG
@@ -609,6 +646,54 @@ def generate_answer(query, results, history=None, is_lecture_q=None):
 
     return answer
 
+CALLBACK_WAIT_MSG = "답변을 찾고 있어요. 조금만 기다려 주세요 🙏"
+
+
+def build_answer(user_msg, user_id, history, gpt_timeout=4.0):
+    """위기 신호 이후 단계 - 검색+답변생성을 수행하고 기록까지 남긴다.
+    동기 응답 경로와 콜백(비동기) 경로에서 공통으로 사용.
+    gpt_timeout: 콜백 경로는 카카오 콜백 제한시간(약 1분) 안에서 여유가
+    있으므로 더 길게, 동기 경로는 카카오 기본 응답 제한(약 5초)에 맞춰
+    짧게 준다"""
+    # 검색용 쿼리: "해당 영상 찾아줘"처럼 지시어만 있는 후속 질문일 때만
+    # 직전 사용자 발화를 함께 붙임. 매번 무조건 붙이면 완전히 새로운
+    # 독립된 질문(예: "방어기제에 대해서 설명 좀 해주세요")까지 이전 발화와
+    # 섞여서 검색 정확도가 오히려 떨어지는 문제가 있어, 지시어가 있을 때로 한정
+    search_query = user_msg
+    prior_user_msgs = [h['content'] for h in history if h['role'] == 'user']
+    if prior_user_msgs and any(w in user_msg for w in FOLLOWUP_REFERENCE_WORDS):
+        search_query = prior_user_msgs[-1] + ' ' + user_msg
+
+    results = search_similar(search_query)
+    is_lecture_q = any(kw in search_query for kw in LECTURE_QUERY_KEYWORDS)
+    answer = generate_answer(user_msg, results, history=history, is_lecture_q=is_lecture_q, gpt_timeout=gpt_timeout)
+
+    append_history(user_id, 'user', user_msg)
+    append_history(user_id, 'assistant', answer)
+    return answer
+
+
+def process_and_callback(user_msg, user_id, history, callback_url):
+    """카카오 콜백(useCallback) 경로 - 시간이 걸려도 콜백 URL로 나중에 답변을 보낸다.
+    (카카오 관리자센터에서 해당 스킬에 콜백 기능이 켜져 있어야 요청에
+    callbackUrl이 포함되며, 꺼져있으면 이 경로는 아예 타지 않고 기존
+    동기 응답으로만 동작한다)"""
+    try:
+        answer = build_answer(user_msg, user_id, history, gpt_timeout=20.0)
+    except Exception as e:
+        print(f"콜백 처리 오류: {e}")
+        answer = FALLBACK_MSG
+
+    payload = {
+        "version": "2.0",
+        "template": {"outputs": [{"simpleText": {"text": answer}}]}
+    }
+    try:
+        requests.post(callback_url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"콜백 전송 실패: {e}")
+
+
 @app.route('/', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "message": "톡쏘는 영성심리 스킬 서버"})
@@ -621,6 +706,7 @@ def skill():
         body = request.get_json()
         user_msg = body.get('userRequest', {}).get('utterance', '')
         user_id = body.get('userRequest', {}).get('user', {}).get('id', 'anonymous')
+        callback_url = body.get('userRequest', {}).get('callbackUrl')
         if not user_msg:
             return jsonify({
                 "version": "2.0",
@@ -628,6 +714,7 @@ def skill():
             })
 
         # 위기 신호는 다른 어떤 분류/검색보다 먼저, GPT 호출 없이 즉시 처리
+        # (대기 없이 바로 안전 안내가 나가야 하므로 콜백 경로를 타지 않음)
         if any(kw in user_msg for kw in CRISIS_KEYWORDS):
             append_history(user_id, 'user', user_msg)
             append_history(user_id, 'assistant', CRISIS_RESPONSE_MSG)
@@ -638,22 +725,20 @@ def skill():
 
         history = get_history(user_id)
 
-        # 검색용 쿼리: "해당 영상 찾아줘"처럼 지시어만 있는 후속 질문일 때만
-        # 직전 사용자 발화를 함께 붙임. 매번 무조건 붙이면 완전히 새로운
-        # 독립된 질문(예: "방어기제에 대해서 설명 좀 해주세요")까지 이전 발화와
-        # 섞여서 검색 정확도가 오히려 떨어지는 문제가 있어, 지시어가 있을 때로 한정
-        search_query = user_msg
-        prior_user_msgs = [h['content'] for h in history if h['role'] == 'user']
-        if prior_user_msgs and any(w in user_msg for w in FOLLOWUP_REFERENCE_WORDS):
-            search_query = prior_user_msgs[-1] + ' ' + user_msg
+        if callback_url:
+            threading.Thread(
+                target=process_and_callback,
+                args=(user_msg, user_id, history, callback_url),
+                daemon=True,
+            ).start()
+            return jsonify({
+                "version": "2.0",
+                "useCallback": True,
+                "data": {"text": CALLBACK_WAIT_MSG}
+            })
 
-        results = search_similar(search_query)
-        is_lecture_q = any(kw in search_query for kw in LECTURE_QUERY_KEYWORDS)
-        answer = generate_answer(user_msg, results, history=history, is_lecture_q=is_lecture_q)
-
-        append_history(user_id, 'user', user_msg)
-        append_history(user_id, 'assistant', answer)
-
+        # 콜백 기능이 꺼져있는 채널(또는 curl 테스트 등)은 기존처럼 동기 응답
+        answer = build_answer(user_msg, user_id, history)
         return jsonify({
             "version": "2.0",
             "template": {
